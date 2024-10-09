@@ -1,0 +1,127 @@
+# Graph database creation cypher scripts:
+# 1. Load 4 node csv files to Neo4j:
+LOAD CSV WITH HEADERS FROM 'file:///player_node.csv' AS row
+CREATE (d:Player {
+    playerID: row.`playerId`,
+    playerName: row.`name`,
+    playerNumber: row.`number`,
+    playerBirthDay: row.`birthDay`,
+    playerBirthMonth: row.`birthMonth`,
+    playerBirthYear: row.`birthYear`,
+    playerAge: row.`age`,
+    playerHeight: row.`height`,
+    playerCaps: row.`caps`,
+    playerInternationalGoals: row.`goalScore`
+})
+
+LOAD CSV WITH HEADERS FROM 'file:///club_node.csv' AS row
+CREATE (d:Club {
+    clubID: row.`clubId`,
+    clubName: row.`club`,
+    clubCountry: row.`clubCountry`
+})
+
+LOAD CSV WITH HEADERS FROM 'file:///country_node.csv' AS row
+CREATE (d:Country {
+    countryID: row.`countryId`,
+    country: row.`country`
+})
+
+LOAD CSV WITH HEADERS FROM 'file:///position_node.csv' AS row
+CREATE (d:Position {
+    positionID: row.`positionId`,
+    positionName: row.`position`
+})
+
+
+# 2. Load 3 relationship csv files to Neo4j:
+LOAD CSV WITH HEADERS FROM 'file:///rel_plays_for.csv' AS row
+MATCH (playernode:Player {playerID: row.`playerId`}),
+(clubnode:Club { clubID: row.`clubId`})
+CREATE (playernode)-[:PLAYS_FOR]->(clubnode)
+
+LOAD CSV WITH HEADERS FROM 'file:///rel_comes_from.csv' AS row
+MATCH (playernode:Player {playerID: row.`playerId`}),
+(countrynode:Country { countryID: row.`countryId`})
+CREATE (playernode)-[:COMES_FROM]->(countrynode)
+
+LOAD CSV WITH HEADERS FROM 'file:///rel_plays_as.csv' AS row
+MATCH (playernode:Player {playerID: row.`playerId`}),
+(positionnode:Position { positionID: row.`positionId`})
+CREATE (playernode)-[:PLAYS_AS]->(positionnode)
+
+
+# Queries cypher scripts:
+# a. :What is the jersy number of the player with '336722'?
+MATCH (p:Player {playerID:"336722"}) RETURN p
+
+# b. Which clubs are based in Mexico ?
+MATCH (c:Club{clubCountry:"Mexico"}) RETURN c
+
+# c. Which club does Alan Pulido play for?
+match(:Player{playerName:"ALAN PULIDO"})-[:PLAYS_FOR] ->(c:Club)return c
+
+# d. How old is Alan Pulido?
+match(p:Player{playerName:"ALAN PULIDO"}) return p.playerAge
+
+# e. In which country is the club that Alan Pulido plays for?
+match(p:Player)-[:PLAYS_FOR]-(c:Club) where p.playerName="ALAN PULIDO" return c.clubCountry
+
+# f. Find a club that has players from Mexico.
+match(p:Player)-[:COMES_FROM]->(:Country{country:"Mexico"}) return p
+
+# g. Find all players play at FSV Mainz 05, returning in ascending orders of age.
+match(p:Player)-[:PLAYS_FOR]->(c:Club{clubName:"FSV MAINZ 05"}) return p order by p.playerAge
+
+# h. Find all Forward players in national team of USA, returning in descending order of caps.
+match (po:Position{positionName:"Forward"})<-[:PLAYS_AS]-(p:Player)-[:COMES_FROM]->(c:Country{country:"USA"}) return p order by p.playerCaps
+
+# i. Find all players born in 1990 and in national team of Japan, returning in descending order of caps.
+MATCH (p:Player{playerBirthYear:"1990"})-[:COMES_FROM]->(:Country{country:"Japan"}) return p order by toInteger(p.playerCaps) DESC
+
+# j. Find the players that belongs to the same club in national team of USA, returning in descending order of international goals.
+MATCH (:Country{country:"USA"})<-[:COMES_FROM]-(p:Player)-[:PLAYS_FOR]->(c:Club)
+WITH c, COUNT(p) AS playerCount, COLLECT(p) AS players
+WHERE playerCount > 1
+UNWIND players as player
+RETURN c.clubName as club,  player ORDER BY club ASC, toInteger(player.playerInternationalGoals) DESC
+
+# k. Count how many players are born in 1990.
+MATCH (p:Player{playerBirthYear:"1990"}) RETURN COUNT(p) AS count
+
+# l. Which age has the highest participation in the 2014 FIFA World Cup?
+MATCH (p:Player)
+WITH p.playerAge AS age, COUNT(p) AS count
+ORDER BY count DESC
+LIMIT 1
+RETURN age, count
+
+# m. Find the path with a length of 2 or 3 between Tigres UANL and MANCHESTER UNITED FC.
+MATCH p=(c1:Club {clubName:"TIGRES UANL"})-[:PLAYS_FOR|COMES_FROM|PLAYS_AS*2..3]-(c2:Club {clubName:"MANCHESTER UNITED FC"})
+RETURN p
+
+# n. Find the top 5 countries with players who have the highest average number of international goals. Return the countries and their average international goals in descending order.
+MATCH (p:Player)-[:COMES_FROM]->(c:Country)
+WITH c, avg(toInteger(p.playerInternationalGoals)) AS avgGoal
+RETURN c.country AS country, round(avgGoal * 100)/100 AS averageGoal
+ORDER BY averageGoal DESC
+LIMIT 5
+
+# o. Identify pairs of players from the same national team who play in different positions but have the closest number of caps. Return these pairs along with their positions and the difference in caps.
+MATCH (pos1:Position)<-[:PLAYS_AS]-(p1:Player)-[:COMES_FROM]->(country:Country)<-[:COMES_FROM]-(p2:Player)-[:PLAYS_AS]->(pos2:Position)
+WHERE pos1 <> pos2 AND p1 <> p2
+WITH p1, p2, pos1, pos2, country, abs(toInteger(p1.playerCaps) - toInteger(p2.playerCaps)) AS capDifference
+ORDER BY country, capDifference ASC
+WITH country, collect({player1: p1, position1: pos1, player1Caps: p1.playerCaps, player2: p2, position2: pos2, player2Caps: p2.playerCaps, capDifference: capDifference}) AS pairs
+RETURN country.country AS country, pairs[0].player1.playerName AS player1, pairs[0].position1.positionName AS position1, pairs[0].player1Caps AS player1Caps,
+       pairs[0].player2.playerName AS player2, pairs[0].position2.positionName AS position2, pairs[0].player2Caps AS player2Caps, pairs[0].capDifference AS capDifference
+
+# p. What number is the most in forward players?
+MATCH (p:Player)-[:PLAYS_AS]->(po:Position{positionName:"Forward"}) 
+WITH p.playerNumber AS jerseyNumber, COUNT(p) AS count
+RETURN jerseyNumber, count
+ORDER BY count DESC
+LIMIT 1
+
+# q. All players have Jersey number 11, in descending order by their age.
+MATCH(p:Player{playerNumber:"11"}) RETURN p ORDER BY p.playerAge DESC
